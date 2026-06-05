@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>精灵属性系统 - 可视化调试网页版</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .panel {
+            background: #fff;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .controls {
+            flex: 1;
+            min-width: 300px;
+        }
+        .visualization {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .control-group {
+            margin-bottom: 15px;
+        }
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .input-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        input[type=range] {
+            flex: 1;
+        }
+        input[type=number] {
+            width: 60px;
+            padding: 4px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        select {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+        }
+        pre#logArea {
+            background: #2d2d2d;
+            color: #a9b7c6;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            margin: 0;
+            height: 200px;
+        }
+        h2 {
+            margin-top: 0;
+            font-size: 18px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="panel controls">
+        <h2>参数调试面板</h2>
+        
+        <div class="control-group">
+            <label>精灵等级 (1-60)</label>
+            <div class="input-row">
+                <input type="range" id="levelRange" min="1" max="60" value="60">
+                <input type="number" id="levelNum" min="1" max="60" value="60">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>属性种族值 (1-999)</label>
+            <div class="input-row">
+                <input type="range" id="baseStatRange" min="1" max="999" value="75">
+                <input type="number" id="baseStatNum" min="1" max="999" value="75">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>基准个体值 (0-10)</label>
+            <div class="input-row">
+                <input type="range" id="ivRange" min="0" max="10" value="10">
+                <input type="number" id="ivNum" min="0" max="10" value="10">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>成长等级 (0-100)</label>
+            <div class="input-row">
+                <input type="range" id="growthLevelRange" min="0" max="50" value="50">
+                <input type="number" id="growthLevelNum" min="0" max="50" value="50">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>成长星级 (受限)</label>
+            <div class="input-row">
+                <input type="range" id="starRange" min="0" max="5" value="5">
+                <input type="number" id="starNum" min="0" max="5" value="5">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>性格影响</label>
+            <select id="natureSelect">
+                <option value="positive" selected>正面增益</option>
+                <option value="neutral">无影响</option>
+                <option value="negative">负面减益</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="visualization">
+        <div class="panel">
+            <h2>属性值随精灵等级成长曲线</h2>
+            <div class="chart-container">
+                <canvas id="statChart"></canvas>
+            </div>
+        </div>
+        <div class="panel">
+            <h2>演算日志</h2>
+            <pre id="logArea"></pre>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 1. 初始化输入控件绑定
+    const inputs = ['level', 'baseStat', 'iv', 'growthLevel', 'star'];
+    inputs.forEach(id => {
+        const range = document.getElementById(id + 'Range');
+        const num = document.getElementById(id + 'Num');
+        
+        range.addEventListener('input', () => { num.value = range.value; updateAll(); });
+        num.addEventListener('input', () => { range.value = num.value; updateAll(); });
+    });
+    document.getElementById('natureSelect').addEventListener('change', updateAll);
+
+    // 2. 初始化图表
+    const ctx = document.getElementById('statChart').getContext('2d');
+    const statChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: Array.from({length: 100}, (_, i) => i + 1), // 1到100级
+            datasets: [
+                {
+                    label: '生命属性值',
+                    borderColor: '#ef4444',
+                    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                    data: [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 6
+                },
+                {
+                    label: '其他属性值',
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    data: [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 6
+                },
+                {
+                    label: '当前生命点',
+                    type: 'scatter',
+                    backgroundColor: '#ef4444',
+                    data: [],
+                    pointRadius: 6
+                },
+                {
+                    label: '当前其他属性点',
+                    type: 'scatter',
+                    backgroundColor: '#3b82f6',
+                    data: [],
+                    pointRadius: 6
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            scales: {
+                x: { title: { display: true, text: '精灵等级 (Level)' } },
+                y: { title: { display: true, text: '最终属性计算值' } }
+            },
+            plugins: {
+                legend: {
+                    labels: { filter: function(item, chart) { return !item.text.includes('点'); } } // 隐藏散点图例
+                }
+            }
+        }
+    });
+
+    // 3. 核心计算与更新逻辑
+    function updateAll() {
+        // 获取参数
+        let lChar = parseInt(document.getElementById('levelNum').value) || 1;
+        let statBase = parseInt(document.getElementById('baseStatNum').value) || 1;
+        let ivBase = parseInt(document.getElementById('ivNum').value) || 0;
+        let lGrowth = parseInt(document.getElementById('growthLevelNum').value) || 0;
+        
+        // 动态约束：成长星级受限
+        let maxStar = Math.floor(lGrowth / 10);
+        let starInput = document.getElementById('starNum');
+        let starRange = document.getElementById('starRange');
+        if (parseInt(starInput.value) > maxStar) {
+            starInput.value = maxStar;
+            starRange.value = maxStar;
+        }
+        let sStar = parseInt(starInput.value) || 0;
+
+        let natureType = document.getElementById('natureSelect').value;
+
+        // 计算基础系数
+        let ivFinal = (1 + sStar) * ivBase;
+        let cStat = statBase + ivFinal / 2;
+        
+        let nature = 1.0;
+        let natureDesc = "无影响";
+        if (natureType === 'positive') {
+            nature = 1 + (0.1 + 0.02 * sStar);
+            natureDesc = "正面增益";
+        } else if (natureType === 'negative') {
+            nature = 0.9;
+            natureDesc = "负面减益";
+        }
+
+        // 生成曲线数据
+        let hpData = [];
+        let otherData = [];
+        for (let lvl = 1; lvl <= 100; lvl++) {
+            let hp = Math.round(((cStat/50 + 1) * lvl + cStat/2 + 10) * nature) + 2 * lGrowth;
+            let other = Math.round(((cStat/100) * lvl + cStat/2 + 10) * nature) + 1 * lGrowth;
+            hpData.push(hp);
+            otherData.push(other);
+        }
+
+        // 当前选中点的数据
+        let hpCurrent = Math.round(((cStat/50 + 1) * lChar + cStat/2 + 10) * nature) + 2 * lGrowth;
+        let otherCurrent = Math.round(((cStat/100) * lChar + cStat/2 + 10) * nature) + 1 * lGrowth;
+
+        // 更新图表
+        statChart.data.datasets[0].data = hpData;
+        statChart.data.datasets[1].data = otherData;
+        statChart.data.datasets[2].data = [{x: lChar, y: hpCurrent}]; // 散点需要特定格式
+        statChart.data.datasets[3].data = [{x: lChar, y: otherCurrent}];
+        statChart.update();
+
+        // 演算细节
+        let hpBaseCalc = (cStat/50 + 1) * lChar + cStat/2 + 10;
+        let otherBaseCalc = (cStat/100) * lChar + cStat/2 + 10;
+
+        // 生成日志
+        const logText = `【1】基础参数解算 (当前等级: ${lChar}, 成长等级: ${lGrowth})
+----------------------------------------------------
+ -> 最大合法成长星级: Math.floor(${lGrowth} / 10) = ${maxStar}
+ -> 当前应用成长星级: ${sStar}
+ -> 最终个体值 = (1 + ${sStar}) * ${ivBase} = ${ivFinal}
+ -> 属性系数 (种族值+个体值/2) = ${statBase} + ${ivFinal/2} = ${cStat.toFixed(1)}
+ -> 性格乘算系数 = ${nature.toFixed(2)} (类型: ${natureDesc})
+
+【2】公式演算细节 (生命属性)
+----------------------------------------------------
+ -> 生命资质 (属性系数/50 + 1) = ${(cStat/50 + 1).toFixed(3)}
+ -> 乘性格后取整 = Math.round(${hpBaseCalc.toFixed(3)} * ${nature.toFixed(2)}) = ${Math.round(hpBaseCalc * nature)}
+ -> 最终生命 = ${Math.round(hpBaseCalc * nature)} + (2 * ${lGrowth}) = ${hpCurrent}
+
+【3】公式演算细节 (其他属性)
+----------------------------------------------------
+ -> 其他资质 (属性系数/100) = ${(cStat/100).toFixed(3)}
+ -> 乘性格后取整 = Math.round(${otherBaseCalc.toFixed(3)} * ${nature.toFixed(2)}) = ${Math.round(otherBaseCalc * nature)}
+ -> 最终其他 = ${Math.round(otherBaseCalc * nature)} + (1 * ${lGrowth}) = ${otherCurrent}
+`;
+        document.getElementById('logArea').innerText = logText;
+    }
+
+    // 初始化调用一次
+    updateAll();
+</script>
+</body>
+</html>
