@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>精灵属性系统 - 可视化调试网页版</title>
+    <title>精灵属性系统 - 多维可视化调试</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
@@ -63,6 +63,46 @@
             border: 1px solid #ccc;
             border-radius: 4px;
         }
+        
+        /* 新增：维度切换选择器样式 */
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        .chart-header h2 {
+            margin: 0;
+            border: none;
+            padding: 0;
+        }
+        .axis-selector {
+            display: flex;
+            background: #f1f5f9;
+            padding: 4px;
+            border-radius: 8px;
+            gap: 4px;
+        }
+        .axis-selector input[type="radio"] {
+            display: none;
+        }
+        .axis-selector label {
+            padding: 6px 12px;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            color: #64748b;
+            transition: all 0.2s;
+        }
+        .axis-selector input[type="radio"]:checked + label {
+            background: #fff;
+            color: #3b82f6;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
         .chart-container {
             position: relative;
             height: 400px;
@@ -119,7 +159,7 @@
         </div>
 
         <div class="control-group">
-            <label>成长等级 (0-100)</label>
+            <label>成长等级 (0-50)</label>
             <div class="input-row">
                 <input type="range" id="growthLevelRange" min="0" max="50" value="50">
                 <input type="number" id="growthLevelNum" min="0" max="50" value="50">
@@ -146,7 +186,22 @@
 
     <div class="visualization">
         <div class="panel">
-            <h2>属性值随精灵等级成长曲线</h2>
+            <div class="chart-header">
+                <h2>属性多维分析曲线</h2>
+                <div class="axis-selector">
+                    <input type="radio" id="xLevel" name="xAxis" value="level" checked>
+                    <label for="xLevel">看等级</label>
+                    
+                    <input type="radio" id="xStar" name="xAxis" value="star">
+                    <label for="xStar">看星级</label>
+                    
+                    <input type="radio" id="xIv" name="xAxis" value="iv">
+                    <label for="xIv">看个体</label>
+                    
+                    <input type="radio" id="xBaseStat" name="xAxis" value="baseStat">
+                    <label for="xBaseStat">看种族</label>
+                </div>
+            </div>
             <div class="chart-container">
                 <canvas id="statChart"></canvas>
             </div>
@@ -169,13 +224,17 @@
         num.addEventListener('input', () => { range.value = num.value; updateAll(); });
     });
     document.getElementById('natureSelect').addEventListener('change', updateAll);
+    
+    // 绑定维度切换按钮
+    document.querySelectorAll('input[name="xAxis"]').forEach(radio => {
+        radio.addEventListener('change', updateAll);
+    });
 
-    // 2. 初始化图表
+    // 2. 初始化图表 (将横坐标类型改为 linear 以支持动态数据对齐)
     const ctx = document.getElementById('statChart').getContext('2d');
     const statChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: Array.from({length: 100}, (_, i) => i + 1), // 1到100级
             datasets: [
                 {
                     label: '生命属性值',
@@ -219,24 +278,43 @@
                 intersect: false,
             },
             scales: {
-                x: { title: { display: true, text: '精灵等级 (Level)' } },
+                x: { 
+                    type: 'linear', // 关键修改：启用线性比例尺
+                    title: { display: true, text: '精灵等级 (Level)' },
+                    ticks: { precision: 0 } // 横坐标只显示整数
+                },
                 y: { title: { display: true, text: '最终属性计算值' } }
             },
             plugins: {
                 legend: {
-                    labels: { filter: function(item, chart) { return !item.text.includes('点'); } } // 隐藏散点图例
+                    labels: { filter: function(item, chart) { return !item.text.includes('点'); } }
                 }
             }
         }
     });
 
+    // 辅助计算函数：给定任意变量组合，计算最终属性
+    function calcPoint(lvl, base, iv, star, lGrowth, natureType) {
+        let ivFinal = (1 + star) * iv;
+        let cStat = base + ivFinal / 2;
+        
+        let nature = 1.0;
+        if (natureType === 'positive') nature = 1 + (0.1 + 0.02 * star);
+        else if (natureType === 'negative') nature = 0.9;
+
+        let hp = Math.round(((cStat/50 + 1) * lvl + cStat/2 + 10) * nature) + 2 * lGrowth;
+        let other = Math.round(((cStat/100) * lvl + cStat/2 + 10) * nature) + 1 * lGrowth;
+        return { hp, other, cStat, nature, ivFinal };
+    }
+
     // 3. 核心计算与更新逻辑
     function updateAll() {
-        // 获取参数
+        // 获取所有当前输入参数
         let lChar = parseInt(document.getElementById('levelNum').value) || 1;
         let statBase = parseInt(document.getElementById('baseStatNum').value) || 1;
         let ivBase = parseInt(document.getElementById('ivNum').value) || 0;
         let lGrowth = parseInt(document.getElementById('growthLevelNum').value) || 0;
+        let natureType = document.getElementById('natureSelect').value;
         
         // 动态约束：成长星级受限
         let maxStar = Math.floor(lGrowth / 10);
@@ -248,67 +326,91 @@
         }
         let sStar = parseInt(starInput.value) || 0;
 
-        let natureType = document.getElementById('natureSelect').value;
-
-        // 计算基础系数
-        let ivFinal = (1 + sStar) * ivBase;
-        let cStat = statBase + ivFinal / 2;
-        
-        let nature = 1.0;
-        let natureDesc = "无影响";
-        if (natureType === 'positive') {
-            nature = 1 + (0.1 + 0.02 * sStar);
-            natureDesc = "正面增益";
-        } else if (natureType === 'negative') {
-            nature = 0.9;
-            natureDesc = "负面减益";
-        }
-
-        // 生成曲线数据
+        // 获取当前分析维度
+        let xAxisMode = document.querySelector('input[name="xAxis"]:checked').value;
         let hpData = [];
         let otherData = [];
-        for (let lvl = 1; lvl <= 100; lvl++) {
-            let hp = Math.round(((cStat/50 + 1) * lvl + cStat/2 + 10) * nature) + 2 * lGrowth;
-            let other = Math.round(((cStat/100) * lvl + cStat/2 + 10) * nature) + 1 * lGrowth;
-            hpData.push(hp);
-            otherData.push(other);
+        let scatterX = 0;
+        let xTitle = '';
+
+        // 根据维度生成不同的数据集序列
+        if (xAxisMode === 'level') {
+            xTitle = '精灵等级 (Level)';
+            scatterX = lChar;
+            for (let i = 1; i <= 60; i++) {
+                let res = calcPoint(i, statBase, ivBase, sStar, lGrowth, natureType);
+                hpData.push({x: i, y: res.hp});
+                otherData.push({x: i, y: res.other});
+            }
+        } else if (xAxisMode === 'star') {
+            xTitle = '成长星级 (Star)';
+            scatterX = sStar;
+            for (let i = 0; i <= 5; i++) {
+                let res = calcPoint(lChar, statBase, ivBase, i, lGrowth, natureType);
+                hpData.push({x: i, y: res.hp});
+                otherData.push({x: i, y: res.other});
+            }
+        } else if (xAxisMode === 'iv') {
+            xTitle = '基准个体值 (IV)';
+            scatterX = ivBase;
+            for (let i = 0; i <= 10; i++) {
+                let res = calcPoint(lChar, statBase, i, sStar, lGrowth, natureType);
+                hpData.push({x: i, y: res.hp});
+                otherData.push({x: i, y: res.other});
+            }
+        } else if (xAxisMode === 'baseStat') {
+            xTitle = '属性种族值 (Base Stat)';
+            scatterX = statBase;
+            // 种族值范围跨度较大，通过推入对象数组由Chart.js自动绘制线段
+            for (let i = 1; i <= 999; i+=2) { 
+                let res = calcPoint(lChar, i, ivBase, sStar, lGrowth, natureType);
+                hpData.push({x: i, y: res.hp});
+                otherData.push({x: i, y: res.other});
+            }
+            // 确保当前的种族值精确点也被画进去
+            let curRes = calcPoint(lChar, statBase, ivBase, sStar, lGrowth, natureType);
+            hpData.push({x: statBase, y: curRes.hp});
+            otherData.push({x: statBase, y: curRes.other});
+            hpData.sort((a,b) => a.x - b.x); // 重排序保证连线正常
+            otherData.sort((a,b) => a.x - b.x);
         }
 
-        // 当前选中点的数据
-        let hpCurrent = Math.round(((cStat/50 + 1) * lChar + cStat/2 + 10) * nature) + 2 * lGrowth;
-        let otherCurrent = Math.round(((cStat/100) * lChar + cStat/2 + 10) * nature) + 1 * lGrowth;
-
+        // 获取当前选中点的精确数据，用于散点和日志输出
+        let currentPoint = calcPoint(lChar, statBase, ivBase, sStar, lGrowth, natureType);
+        
         // 更新图表
+        statChart.options.scales.x.title.text = xTitle;
         statChart.data.datasets[0].data = hpData;
         statChart.data.datasets[1].data = otherData;
-        statChart.data.datasets[2].data = [{x: lChar, y: hpCurrent}]; // 散点需要特定格式
-        statChart.data.datasets[3].data = [{x: lChar, y: otherCurrent}];
+        statChart.data.datasets[2].data = [{x: scatterX, y: currentPoint.hp}]; 
+        statChart.data.datasets[3].data = [{x: scatterX, y: currentPoint.other}];
         statChart.update();
 
         // 演算细节
-        let hpBaseCalc = (cStat/50 + 1) * lChar + cStat/2 + 10;
-        let otherBaseCalc = (cStat/100) * lChar + cStat/2 + 10;
+        let natureDesc = natureType === 'positive' ? "正面增益" : (natureType === 'negative' ? "负面减益" : "无影响");
+        let hpBaseCalc = (currentPoint.cStat/50 + 1) * lChar + currentPoint.cStat/2 + 10;
+        let otherBaseCalc = (currentPoint.cStat/100) * lChar + currentPoint.cStat/2 + 10;
 
         // 生成日志
         const logText = `【1】基础参数解算 (当前等级: ${lChar}, 成长等级: ${lGrowth})
 ----------------------------------------------------
  -> 最大合法成长星级: Math.floor(${lGrowth} / 10) = ${maxStar}
  -> 当前应用成长星级: ${sStar}
- -> 最终个体值 = (1 + ${sStar}) * ${ivBase} = ${ivFinal}
- -> 属性系数 (种族值+个体值/2) = ${statBase} + ${ivFinal/2} = ${cStat.toFixed(1)}
- -> 性格乘算系数 = ${nature.toFixed(2)} (类型: ${natureDesc})
+ -> 最终个体值 = (1 + ${sStar}) * ${ivBase} = ${currentPoint.ivFinal}
+ -> 属性系数 (种族值+个体值/2) = ${statBase} + ${currentPoint.ivFinal/2} = ${currentPoint.cStat.toFixed(1)}
+ -> 性格乘算系数 = ${currentPoint.nature.toFixed(2)} (类型: ${natureDesc})
 
 【2】公式演算细节 (生命属性)
 ----------------------------------------------------
- -> 生命资质 (属性系数/50 + 1) = ${(cStat/50 + 1).toFixed(3)}
- -> 乘性格后取整 = Math.round(${hpBaseCalc.toFixed(3)} * ${nature.toFixed(2)}) = ${Math.round(hpBaseCalc * nature)}
- -> 最终生命 = ${Math.round(hpBaseCalc * nature)} + (2 * ${lGrowth}) = ${hpCurrent}
+ -> 生命资质 (属性系数/50 + 1) = ${(currentPoint.cStat/50 + 1).toFixed(3)}
+ -> 乘性格后取整 = Math.round(${hpBaseCalc.toFixed(3)} * ${currentPoint.nature.toFixed(2)}) = ${Math.round(hpBaseCalc * currentPoint.nature)}
+ -> 最终生命 = ${Math.round(hpBaseCalc * currentPoint.nature)} + (2 * ${lGrowth}) = ${currentPoint.hp}
 
 【3】公式演算细节 (其他属性)
 ----------------------------------------------------
- -> 其他资质 (属性系数/100) = ${(cStat/100).toFixed(3)}
- -> 乘性格后取整 = Math.round(${otherBaseCalc.toFixed(3)} * ${nature.toFixed(2)}) = ${Math.round(otherBaseCalc * nature)}
- -> 最终其他 = ${Math.round(otherBaseCalc * nature)} + (1 * ${lGrowth}) = ${otherCurrent}
+ -> 其他资质 (属性系数/100) = ${(currentPoint.cStat/100).toFixed(3)}
+ -> 乘性格后取整 = Math.round(${otherBaseCalc.toFixed(3)} * ${currentPoint.nature.toFixed(2)}) = ${Math.round(otherBaseCalc * currentPoint.nature)}
+ -> 最终其他 = ${Math.round(otherBaseCalc * currentPoint.nature)} + (1 * ${lGrowth}) = ${currentPoint.other}
 `;
         document.getElementById('logArea').innerText = logText;
     }
